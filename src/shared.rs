@@ -43,6 +43,7 @@ impl CryptoChannel {
     }
 
     // Diffie-Hellman 密钥交换
+    // 测试GitHub Signing Key
     pub fn perform_key_exchange(&mut self, is_server: bool) -> Result<(), Box<dyn Error>> {
         let mut rng = OsRng;
         let mut private_key = [0u8; 32];
