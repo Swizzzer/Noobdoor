@@ -1,7 +1,8 @@
 use chacha20::{ChaCha20, Key, Nonce};
 use chacha20::cipher::{KeyIvInit, StreamCipher};
 use curve25519_dalek::{montgomery::MontgomeryPoint, scalar::Scalar, constants::X25519_BASEPOINT};
-use rand::{rngs::OsRng, RngCore};
+use rand::TryRngCore;
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Sha256, Digest};
 use std::error::Error;
@@ -44,35 +45,32 @@ impl CryptoChannel {
     // Diffie-Hellman 密钥交换
     pub fn perform_key_exchange(&mut self, is_server: bool) -> Result<(), Box<dyn Error>> {
         let mut rng = OsRng;
-        
         let mut private_key = [0u8; 32];
-        rng.fill_bytes(&mut private_key);
+        rng.try_fill_bytes(&mut private_key)?;
         let private_key = Scalar::from_bytes_mod_order(private_key);
-        
         let public_key = X25519_BASEPOINT * private_key;
-        let my_public = public_key.as_bytes().clone();
         
         if is_server {
             let mut client_public = [0u8; 32];
             self.stream.read_exact(&mut client_public)?;
-            self.stream.write_all(&my_public)?;
+            self.stream.write_all(public_key.as_bytes())?;
             
             let client_point = MontgomeryPoint(client_public);
-            let shared_secret = (client_point * private_key).as_bytes().clone();
+            let shared_secret = client_point * private_key;
             
             let mut hasher = Sha256::new();
-            hasher.update(&shared_secret);
+            hasher.update(shared_secret.as_bytes());
             self.current_key = Some(hasher.finalize().into());
         } else {
-            self.stream.write_all(&my_public)?;
+            self.stream.write_all(public_key.as_bytes())?;
             let mut server_public = [0u8; 32];
             self.stream.read_exact(&mut server_public)?;
             
             let server_point = MontgomeryPoint(server_public);
-            let shared_secret = (server_point * private_key).as_bytes().clone();
+            let shared_secret = server_point * private_key;
             
             let mut hasher = Sha256::new();
-            hasher.update(&shared_secret);
+            hasher.update(shared_secret.as_bytes());
             self.current_key = Some(hasher.finalize().into());
         }
         
@@ -104,18 +102,19 @@ impl CryptoChannel {
         
         let mut rng = OsRng;
         let mut nonce_bytes = [0u8; 12];
-        rng.fill_bytes(&mut nonce_bytes);
+        rng.try_fill_bytes(&mut nonce_bytes)?;
         
         let key = Key::from_slice(&key);
         let nonce = Nonce::from_slice(&nonce_bytes);
         let mut cipher = ChaCha20::new(key, nonce);
-        
+    
         let mut encrypted = data.to_vec();
         cipher.apply_keystream(&mut encrypted);
-        
         let len = encrypted.len() as u32;
-        self.stream.write_all(&len.to_be_bytes())?;
-        self.stream.write_all(&nonce_bytes)?;
+        let mut header = Vec::with_capacity(4 + 12);
+        header.extend_from_slice(&len.to_be_bytes());
+        header.extend_from_slice(&nonce_bytes);
+        self.stream.write_all(&header)?;
         self.stream.write_all(&encrypted)?;
         self.stream.flush()?;
         
@@ -139,9 +138,8 @@ impl CryptoChannel {
         let nonce = Nonce::from_slice(&nonce_bytes);
         let mut cipher = ChaCha20::new(key, nonce);
         
-        let mut decrypted = encrypted;
-        cipher.apply_keystream(&mut decrypted);
+        cipher.apply_keystream(&mut encrypted);
         
-        Ok(decrypted)
+        Ok(encrypted)
     }
 }
